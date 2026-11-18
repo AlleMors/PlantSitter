@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PlantSitter</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>🌱 PlantSitter</h1>
+  <span id="status-pill" class="pill">…</span>
+</header>
+
+<main>
+  <!-- AUTH -->
+  <section id="view-auth" hidden>
+    <h2 id="auth-title">Accedi</h2>
+    <form id="auth-form">
+      <label>Utente <input name="user" autocomplete="username" required></label>
+      <label>Password <input name="pass" type="password" autocomplete="current-password" required minlength="6"></label>
+      <button type="submit">Entra</button>
+      <p id="auth-error" class="error"></p>
+    </form>
+  </section>
+
+  <!-- DASHBOARD -->
+  <section id="view-main" hidden>
+    <nav class="tabs">
+      <button class="tab active" data-tab="zones">Zone</button>
+      <button class="tab" data-tab="schedule">Programmi</button>
+      <button class="tab" data-tab="settings">Impostazioni</button>
+    </nav>
+
+    <div id="tab-zones" class="tab-panel active">
+      <p class="hint">Una sola zona può essere aperta alla volta.</p>
+      <div id="zone-list" class="zone-grid"></div>
+    </div>
+
+    <div id="tab-schedule" class="tab-panel">
+      <p class="hint">Ogni riga è una finestra oraria; <em>giorni</em> sono segnati L M M G V S D.</p>
+      <div id="schedule-editor"></div>
+      <div class="actions">
+        <button id="btn-save-config" class="primary">Salva programmi</button>
+        <span id="save-msg" class="ok"></span>
+      </div>
+    </div>
+
+    <div id="tab-settings" class="tab-panel">
+      <dl id="status-list"></dl>
+      <div class="row">
+        <button id="btn-logout">Esci</button>
+        <button id="btn-reboot" class="danger">Riavvia dispositivo</button>
+      </div>
+      <p class="hint">Firmware OTA disponibile su <a href="/update" target="_blank">/update</a></p>
+      <p class="hint">Log: <a href="/api/log" target="_blank">testo</a> · <a href="/api/debug" target="_blank">JSON</a></p>
+    </div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

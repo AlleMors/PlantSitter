@@ -1,0 +1,25 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/.browse.*
+
+# Build artifacts
+*.bin
+*.elf
+*.map
+*.hex
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Secrets / local overrides
+secrets.ini
+platformio_override.ini
