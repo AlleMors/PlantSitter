@@ -7,6 +7,22 @@ Ricreata da un vecchio progetto per ESP8266: 8 relè da 5 V che comandano
 elettrovalvole da 24 V AC, più un'interfaccia web in LAN per impostare i
 programmi di irrigazione.
 
+## Stato del progetto
+
+Verificato su hardware reale (NodeMCU 4 MB, banco senza valvole):
+
+- boot, captive portal, connessione WiFi, mDNS, web UI
+- setup credenziali, login, sessioni, protezione delle API
+- apertura/chiusura zona, interlock, chiusura automatica a fine durata
+- schedulazione a orario, persistenza dopo riavvio
+- fuso orario (CET) e sincronizzazione NTP
+- aggiornamento OTA dell'intero firmware via `/update`
+
+**Non ancora verificato**: lettura del DS3231 (modulo non disponibile in
+banco), polarità reale della scheda relè (il codice assume attivo-basso:
+verificare col multimetro prima di collegare le valvole) e comportamento
+con le elettrovalvole collegate.
+
 ## Caratteristiche
 
 - **8 zone**, una alla volta (mutex hardware e software)
