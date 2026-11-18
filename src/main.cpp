@@ -164,10 +164,25 @@ void loop() {
     if (mdnsStarted) MDNS.update();
 
     // Reconnect WiFi (non blocca lo scheduler)
-    if (WiFi.status() != WL_CONNECTED && millis() - lastHeal > 10000) {
-        lastHeal = millis();
-        PS_LOG(LOG_WARN, "WiFi perso, tentativo di riconnessione");
-        WiFi.reconnect();
+    static unsigned long disconnectedSince = 0;
+    if (WiFi.status() != WL_CONNECTED) {
+        if (disconnectedSince == 0) disconnectedSince = millis();
+        if (millis() - lastHeal > 10000) {
+            lastHeal = millis();
+            PS_LOG(LOG_WARN, "WiFi perso, tentativo di riconnessione");
+            WiFi.reconnect();
+        }
+        // Se per un minuto non si riconnette, riavvia: al boot WiFiManager
+        // riapre l'AP di setup. Senza questo il dispositivo resta
+        // irraggiungibile finché non lo si collega via USB.
+        if (millis() - disconnectedSince > 60000UL) {
+            PS_LOG(LOG_ERROR, "WiFi assente da 60s: riavvio per riaprire il "
+                   "portale di configurazione");
+            delay(100);
+            ESP.restart();
+        }
+    } else {
+        disconnectedSince = 0;
     }
 
     // Re-sync orario dopo riconnessione
