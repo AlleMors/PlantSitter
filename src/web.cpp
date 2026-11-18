@@ -236,14 +236,13 @@ namespace {
     // Rotte
     // -----------------------------------------------------------------
     // ---- stato OTA ----
-    // otaRan/otaOk esistono perché Updater::isFinished() è TRUE anche quando
+    // otaComplete/otaOk esistono perché Updater::isFinished() è TRUE anche quando
     // non è avvenuto alcun upload (0 == 0 + 0): senza stato esplicito un
     // POST vuoto riavvierebbe il dispositivo dichiarando successo.
-    bool otaRan = false;
     bool otaOk = false;
     unsigned long restartAtMs = 0;
 
-    // Serializzazione dell'upload. Update e otaRan/otaOk sono globali:
+    // Serializzazione dell'upload. Update e otaComplete/otaOk sono globali:
     // due upload concorrenti (retry del browser mentre la prima connessione
     // è appesa) mescolerebbero i due file in un'unica immagine.
     AsyncWebServerRequest* otaOwner = nullptr;
@@ -330,6 +329,8 @@ namespace {
                 // I flag appartengono all'upload in corso: se questa richiesta
                 // non ne era il proprietario (es. un secondo client), non
                 // consumiamo l'esito di qualcun altro.
+                PS_LOG(LOG_INFO, "OTA post: owner=%d complete=%d ok=%d",
+                       otaOwner == req ? 1 : 0, otaComplete ? 1 : 0, otaOk ? 1 : 0);
                 if (otaOwner != req) {
                     if (!requireAuth(req)) return;
                     // Un secondo client ha tentato un upload mentre un altro
@@ -339,18 +340,17 @@ namespace {
                 }
                 otaOwner = nullptr;
                 if (!requireAuth(req)) {      // 401 se la sessione è scaduta
-                    otaRan = false; otaOk = false;
+                    otaComplete = false; otaOk = false;
                     return;
                 }
-                bool ok = otaComplete && otaOk && !Update.hasError();
+                bool complete = otaComplete;
+                bool ok = complete && otaOk && !Update.hasError();
                 otaComplete = false;
                 // Il flag è per-richiesta: senza questo reset, un POST vuoto
                 // dopo un upload riuscito riporterebbe "completato" (e
                 // riavvierebbe) basandosi sull'esito del precedente.
-                bool ran = otaRan;
-                otaRan = false;
                 otaOk = false;
-                if (!ran) {
+                if (!complete) {
                     sendErr(req, 400, "nessun file ricevuto");
                     return;
                 }
@@ -370,6 +370,12 @@ namespace {
                uint8_t* data, size_t len, bool final) {
                 // N.B. questo è l'handler di UPLOAD (non onBody): deve
                 // esserci un solo overload con la firma a 6 parametri.
+                // Log solo prima di qualsiasi scrittura flash: durante
+                // l'aggiornamento la seriale/UDP non sono sicuri.
+                if (index == 0) {
+                    PS_LOG(LOG_INFO, "OTA: upload avviato (len=%u, auth=%d)",
+                           (unsigned)len, authorized(req) ? 1 : 0);
+                }
                 // 1) Autorizzazione PRIMA di toccare la flash.
                 if (!requireAuth(req)) return;
 
@@ -387,7 +393,7 @@ namespace {
                     otaOwner = req;
                     otaBytes = 0;
                     otaOk = false;
-                    otaRan = false;
+                    otaComplete = false;
                     // Se il client sparisce a metà, libera la proprietà e
                     // annulla l'update: altrimenti resterebbe bloccato per
                     // sempre e il prossimo upload verrebbe rifiutato.
@@ -395,7 +401,7 @@ namespace {
                         if (otaOwner == req) {
                             if (Update.isRunning()) Update.end(false);
                             otaOwner = nullptr;
-                            otaRan = false;
+                            otaComplete = false;
                             otaOk = false;
                             pslog::setQuiet(false);
                         }
@@ -411,7 +417,6 @@ namespace {
                     if (!Update.begin(otaMaxSize())) {
                         PS_LOG(LOG_ERROR, "OTA: begin rifiutato: %s",
                                Update.getErrorString().c_str());
-                        otaRan = true;
                         otaComplete = true;
                         pslog::setQuiet(false);
                         return;
@@ -425,7 +430,6 @@ namespace {
                     if (otaBytes == 0 && !otaHeaderSane(data, len)) {
                         PS_LOG(LOG_ERROR, "OTA: header non valido, upload annullato");
                         Update.end(false);
-                        otaRan = true;
                         otaComplete = true;
                         pslog::setQuiet(false);
                         return;
