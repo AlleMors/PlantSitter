@@ -248,6 +248,7 @@ namespace {
     // è appesa) mescolerebbero i due file in un'unica immagine.
     AsyncWebServerRequest* otaOwner = nullptr;
     size_t otaBytes = 0;
+    bool otaComplete = false;
 
     // Un .bin ESP8266 valido inizia con 0xE9, ha 1..16 segmenti e un
     // flash mode 0..3. Updater verifica SOLO il primo byte: senza questi
@@ -274,55 +275,34 @@ namespace {
         return cap < SKETCH_REGION ? cap : SKETCH_REGION;
     }
 
-    void registerRoutes() {
-        // Middleware: le rotte JSON accettano solo application/json e corpi
-        // entro il limite. Senza questo, un x-www-form-urlencoded viene
-        // bufferizzato dalla libreria SENZA limite e senza passare dalle
-        // callback che controllano la dimensione (~40 KB di heap).
-        server.addMiddleware([](AsyncWebServerRequest* req, ArMiddlewareNext next) {
-            // /update è esente: multipart grande, handler con skip dei
-            // middleware e autenticazione propria nelle callback di upload.
-            if (req->url() == "/update") { next(); return; }
-            if (req->method() == AsyncWebRequestMethod::HTTP_POST) {
-                if (req->contentLength() > API_BODY_LIMIT) {
-                    sendErr(req, 413, "body troppo grande");
-                    return;
-                }
-                if (req->hasHeader("Content-Type")) {
-                    String ct = req->getHeader("Content-Type")->value();
-                    bool json = ct.startsWith("application/json");
-                    bool form = ct.startsWith("application/x-www-form-urlencoded");
-                    bool multipart = ct.startsWith("multipart/form-data");
-                    if ((form || multipart) && req->url().startsWith("/api/")) {
-                        sendErr(req, 415, "content-type non supportato");
-                        return;
-                    }
-                    if (!json && !multipart && req->url().startsWith("/api/")
-                        && req->url() != "/api/zone/close"
-                        && req->url() != "/api/zone/close_all"
-                        && req->url() != "/api/logout"
-                        && req->url() != "/api/reboot") {
-                        sendErr(req, 415, "content-type non supportato");
-                        return;
-                    }
-                }
-            }
-            next();
-        });
+    // Controllo applicato all'inizio di ogni handler JSON. Non esiste più un
+    // middleware globale: il fork ESPHome non lo espone. Il limite di
+    // dimensione viene comunque applicato in accumulate().
+    bool rejectBadContentType(AsyncWebServerRequest* req) {
+        if (!req->hasHeader("Content-Type")) return false;
+        String ct = req->getHeader("Content-Type")->value();
+        if (ct.startsWith("application/json")) return false;
+        // I POST senza corpo (logout/reboot/close) possono non avere un
+        // content-type utile: li lasciamo passare.
+        if (req->contentLength() == 0) return false;
+        sendErr(req, 415, "content-type non supportato (atteso application/json)");
+        return true;
+    }
 
+    void registerRoutes() {
         // Serve SOLO gli asset della UI, percorso per percorso. Un
         // serveStatic("/") servirebbe anche /data/config.json (salt+hash
         // della password) e /data/log.txt: LittleFS non ha permessi.
-        server.on("/", AsyncWebRequestMethod::HTTP_GET, [](AsyncWebServerRequest* req) {
+        server.on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
             req->send(LittleFS, "/index.html", "text/html");
         });
-        server.on("/index.html", AsyncWebRequestMethod::HTTP_GET, [](AsyncWebServerRequest* req) {
+        server.on("/index.html", HTTP_GET, [](AsyncWebServerRequest* req) {
             req->send(LittleFS, "/index.html", "text/html");
         });
-        server.on("/app.js", AsyncWebRequestMethod::HTTP_GET, [](AsyncWebServerRequest* req) {
+        server.on("/app.js", HTTP_GET, [](AsyncWebServerRequest* req) {
             req->send(LittleFS, "/app.js", "application/javascript");
         });
-        server.on("/style.css", AsyncWebRequestMethod::HTTP_GET, [](AsyncWebServerRequest* req) {
+        server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest* req) {
             req->send(LittleFS, "/style.css", "text/css");
         });
 
@@ -331,7 +311,7 @@ namespace {
         // flash DURANTE il parsing del multipart, prima che un middleware
         // possa rispondere 401. Qui la sessione è verificata nella stessa
         // callback di upload, prima di qualunque Update.begin()/write().
-        server.on("/update", AsyncWebRequestMethod::HTTP_GET, [](AsyncWebServerRequest* req) {
+        server.on("/update", HTTP_GET, [](AsyncWebServerRequest* req) {
             if (!requireAuth(req)) return;
             char page[420];
             snprintf_P(page, sizeof(page), PSTR(
@@ -345,7 +325,7 @@ namespace {
 
         // /update: esente dai middleware JSON (multipart, grandi, e senza
         // Content-Type JSON). La protezione è nei callback qui sotto.
-        server.on("/update", AsyncWebRequestMethod::HTTP_POST,
+        server.on("/update", HTTP_POST,
             [](AsyncWebServerRequest* req) {
                 // I flag appartengono all'upload in corso: se questa richiesta
                 // non ne era il proprietario (es. un secondo client), non
@@ -362,7 +342,8 @@ namespace {
                     otaRan = false; otaOk = false;
                     return;
                 }
-                bool ok = otaOk && !Update.hasError();
+                bool ok = otaComplete && otaOk && !Update.hasError();
+                otaComplete = false;
                 // Il flag è per-richiesta: senza questo reset, un POST vuoto
                 // dopo un upload riuscito riporterebbe "completato" (e
                 // riavvierebbe) basandosi sull'esito del precedente.
@@ -407,11 +388,32 @@ namespace {
                     otaBytes = 0;
                     otaOk = false;
                     otaRan = false;
+                    // Se il client sparisce a metà, libera la proprietà e
+                    // annulla l'update: altrimenti resterebbe bloccato per
+                    // sempre e il prossimo upload verrebbe rifiutato.
+                    req->onDisconnect([req]() {
+                        if (otaOwner == req) {
+                            if (Update.isRunning()) Update.end(false);
+                            otaOwner = nullptr;
+                            otaRan = false;
+                            otaOk = false;
+                            pslog::setQuiet(false);
+                        }
+                    });
+                    // Da qui in poi si scrive la flash: i log non devono
+                    // usare UDP/LittleFS (panic __yield altrimenti).
+                    pslog::setQuiet(true);
+                    // L'upload arriva da una callback di rete, non da loop():
+                    // Updater di default chiama yield() a ogni scrittura, e
+                    // yield() da questo contesto causa "Panic __yield".
+                    Update.runAsync(true);
                     sched::closeAll();          // sicurezza: nessuna valvola aperta
                     if (!Update.begin(otaMaxSize())) {
                         PS_LOG(LOG_ERROR, "OTA: begin rifiutato: %s",
                                Update.getErrorString().c_str());
-                        otaOwner = nullptr;
+                        otaRan = true;
+                        otaComplete = true;
+                        pslog::setQuiet(false);
                         return;
                     }
                 }
@@ -423,7 +425,9 @@ namespace {
                     if (otaBytes == 0 && !otaHeaderSane(data, len)) {
                         PS_LOG(LOG_ERROR, "OTA: header non valido, upload annullato");
                         Update.end(false);
-                        otaOwner = nullptr;
+                        otaRan = true;
+                        otaComplete = true;
+                        pslog::setQuiet(false);
                         return;
                     }
                     if (!Update.hasError() && Update.write(data, len) != len) {
@@ -449,15 +453,20 @@ namespace {
                         }
                         Update.end(false);      // non committare l'incompleto
                     }
-                    otaOwner = nullptr;
+                    pslog::setQuiet(false);
+                    // La proprietà resta fino all'handler finale, che la
+                    // consuma: liberarla qui faceva rispondere 409 dopo un
+                    // upload riuscito.
+                    otaComplete = true;
                 }
-            }).setSkipServerMiddlewares(true);
+            });
 
         // AUTH
-        server.on("/api/login", AsyncWebRequestMethod::HTTP_POST,
+        server.on("/api/login", HTTP_POST,
             [](AsyncWebServerRequest*) { /* body gestito in onBody */ },
             [](AsyncWebServerRequest*, const String&, size_t, uint8_t*, size_t, bool) {},
             [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+                if (index == 0 && rejectBadContentType(req)) return;
                 String body;
                 bool tooLarge = false;
                 if (!accumulate(req, data, len, index, total, body, tooLarge)) {
@@ -483,11 +492,11 @@ namespace {
                 createSession(req);
             });
 
-        server.on("/api/logout", AsyncWebRequestMethod::HTTP_POST, [](AsyncWebServerRequest* req) {
+        server.on("/api/logout", HTTP_POST, [](AsyncWebServerRequest* req) {
             destroySession(req);
         });
 
-        server.on("/api/session", AsyncWebRequestMethod::HTTP_GET, [](AsyncWebServerRequest* req) {
+        server.on("/api/session", HTTP_GET, [](AsyncWebServerRequest* req) {
             JsonDocument d;
             d["authenticated"] = authorized(req);
             d["has_password"] = store::hasPassword();
@@ -496,10 +505,11 @@ namespace {
             sendJson(req, 200, s);
         });
 
-        server.on("/api/setup", AsyncWebRequestMethod::HTTP_POST,
+        server.on("/api/setup", HTTP_POST,
             [](AsyncWebServerRequest*) {},
             [](AsyncWebServerRequest*, const String&, size_t, uint8_t*, size_t, bool) {},
             [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+                if (index == 0 && rejectBadContentType(req)) return;
                 String body;
                 bool tooLarge = false;
                 if (!accumulate(req, data, len, index, total, body, tooLarge)) {
@@ -527,11 +537,11 @@ namespace {
             });
 
         // CONFIG
-        server.on("/api/config", AsyncWebRequestMethod::HTTP_GET, [](AsyncWebServerRequest* req) {
+        server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest* req) {
             if (!requireAuth(req)) return;
             sendJson(req, 200, store::toJson());
         });
-        server.on("/api/config", AsyncWebRequestMethod::HTTP_POST,
+        server.on("/api/config", HTTP_POST,
             [](AsyncWebServerRequest* req) {
                 if (!requireAuth(req)) return;
             },
@@ -562,12 +572,12 @@ namespace {
             });
 
         // ZONES runtime
-        server.on("/api/zones", AsyncWebRequestMethod::HTTP_GET, [](AsyncWebServerRequest* req) {
+        server.on("/api/zones", HTTP_GET, [](AsyncWebServerRequest* req) {
             if (!requireAuth(req)) return;
             sendJson(req, 200, zoneStateJson());
         });
 
-        server.on("/api/zone/open", AsyncWebRequestMethod::HTTP_POST,
+        server.on("/api/zone/open", HTTP_POST,
             [](AsyncWebServerRequest*) {},
             [](AsyncWebServerRequest*, const String&, size_t, uint8_t*, size_t, bool) {},
             [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
@@ -589,48 +599,50 @@ namespace {
                 sendJson(req, 200, zoneStateJson());
             });
 
-        server.on("/api/zone/close", AsyncWebRequestMethod::HTTP_POST, [](AsyncWebServerRequest* req) {
+        server.on("/api/zone/close", HTTP_POST, [](AsyncWebServerRequest* req) {
             if (!requireAuth(req)) return;
             String r = "manuale";
             if (!sched::closeZone(r)) { sendErr(req, 409, "nessuna zona aperta"); return; }
             sendJson(req, 200, zoneStateJson());
         });
 
-        server.on("/api/zone/close_all", AsyncWebRequestMethod::HTTP_POST, [](AsyncWebServerRequest* req) {
+        server.on("/api/zone/close_all", HTTP_POST, [](AsyncWebServerRequest* req) {
             if (!requireAuth(req)) return;
             sched::closeAll();
             sendJson(req, 200, zoneStateJson());
         });
 
         // STATUS / DEBUG (dati del dispositivo: richiedono la sessione)
-        server.on("/api/status", AsyncWebRequestMethod::HTTP_GET, [](AsyncWebServerRequest* req) {
+        server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req) {
             if (!requireAuth(req)) return;
             sendJson(req, 200, statusJson());
         });
 
-        server.on("/api/debug", AsyncWebRequestMethod::HTTP_GET, [](AsyncWebServerRequest* req) {
+        server.on("/api/debug", HTTP_GET, [](AsyncWebServerRequest* req) {
             if (!requireAuth(req)) return;
             sendJson(req, 200, "{\"log\":" + pslog::dumpJson(200) + "}");
         });
 
-        server.on("/api/log", AsyncWebRequestMethod::HTTP_GET, [](AsyncWebServerRequest* req) {
+        server.on("/api/log", HTTP_GET, [](AsyncWebServerRequest* req) {
             if (!requireAuth(req)) return;
             req->send(200, "text/plain", pslog::dumpText(100));
         });
 
-        server.on("/api/reboot", AsyncWebRequestMethod::HTTP_POST, [](AsyncWebServerRequest* req) {
+        server.on("/api/reboot", HTTP_POST, [](AsyncWebServerRequest* req) {
             if (!requireAuth(req)) return;
             sched::closeAll();
+            // Riavvio differito: ESP.restart() qui fermerebbe la catena
+            // prima che la risposta venga trasmessa (il client vedrebbe
+            // un errore di connessione invece di {"ok":true}).
             sendJson(req, 200, "{\"ok\":true}");
-            delay(300);
-            ESP.restart();
+            restartAtMs = millis() + 500;
         });
 
         // 404 -> JSON per /api/*, index per le rotte SPA, 404 per il resto.
         // Solo GET: un 404 non deve rimandare l'index a un POST.
         server.onNotFound([](AsyncWebServerRequest* req) {
             if (req->url().startsWith("/api/")) { sendErr(req, 404, "endpoint sconosciuto"); return; }
-            if (req->method() == AsyncWebRequestMethod::HTTP_GET) {
+            if (req->method() == HTTP_GET) {
                 req->send(LittleFS, "/index.html", "text/html");
                 return;
             }

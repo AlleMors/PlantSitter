@@ -17,6 +17,7 @@ namespace {
     size_t    count = 0;
     bool      fsReady = false;
     bool      udpReady = false;
+    bool      quiet = false;
     IPAddress udpPeer;
     WiFiUDP   udp;
     unsigned long lastFileFlush = 0;
@@ -73,6 +74,8 @@ void begin() {
     }
 }
 
+void setQuiet(bool q) { quiet = q; }
+
 void setUdpPeer(IPAddress addr) {
     udpPeer = addr;
     udpReady = true;
@@ -92,6 +95,8 @@ void write(LogLevel level, const char* file, int line, const char* fmt, ...) {
     String out = timestamp() + "  " + levelStr(level) + " " + base + ":" + String(line) + "  " + msg;
 
     push(out, level);
+    // Durante l'OTA si scrive la flash: niente UDP (lwIP) né LittleFS.
+    if (quiet) return;
 #ifdef PLANTSITTER_DEBUG_BUILD
     Serial.println(out);
 #endif

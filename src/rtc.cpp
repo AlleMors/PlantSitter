@@ -93,7 +93,11 @@ void rtcSet(time_t t) {
 }
 
 void ntpSync() {
-    configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
+    // NB: configTime(int, int, ...) NON imposta il fuso, scrive un offset
+    // fisso e ignora la variabile TZ (vedi cores/esp8266/time.cpp). Va usata
+    // la variante con la regola POSIX, altrimenti localtime restituisce UTC
+    // e tutti gli orari programmati slittano di una o due ore.
+    configTime(tzRule.c_str(), "pool.ntp.org", "time.cloudflare.com");
     unsigned long start = millis();
     while (!ntpAvailable() && millis() - start < 10000) {
         delay(100);
@@ -116,8 +120,7 @@ void ntpSync() {
 
 void applyTimezone(const String& rule) {
     tzRule = rule;
-    setenv("TZ", rule.c_str(), 1);
-    tzset();
+    setTZ(rule.c_str());   // setenv + tzset, come il core
 }
 
 bool clockValid() { return time(nullptr) > 1704067200; }
