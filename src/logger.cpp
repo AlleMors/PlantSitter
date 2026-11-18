@@ -92,6 +92,9 @@ void write(LogLevel level, const char* file, int line, const char* fmt, ...) {
     String out = timestamp() + "  " + levelStr(level) + " " + base + ":" + String(line) + "  " + msg;
 
     push(out, level);
+#ifdef PLANTSITTER_DEBUG_BUILD
+    Serial.println(out);
+#endif
     if (udpReady && WiFi.status() == WL_CONNECTED) {
         udp.beginPacket(udpPeer, LOG_UDP_PORT);
         udp.write((const uint8_t*)out.c_str(), out.length());

@@ -63,18 +63,22 @@ Vedi [docs/BOM.md](docs/BOM.md) e [docs/WIRING.md](docs/WIRING.md).
 
 | Segnale | Pin | GPIO |
 |---|---|---|
-| IN1..IN8 | D0, D1, D2, D3, D4, D5, D6, D7 | 16, 5, 4, 0, 2, 14, 12, 13 |
-| I2C SDA / SCL | RX / TX | 3 / 1 |
+| IN1..IN8 | D0, D1, D2, D5, D6, D7, RX, TX | 16, 5, 4, 14, 12, 13, 3, 1 |
+| I2C SDA / SCL | D3 / D4 | 0 / 2 |
 | LED status | D8 | 15 |
 
-> ⚠️ **D3 (GPIO0) e D4 (GPIO2) sono pin di boot.** Gli ingressi relè sono
-> attivi bassi e tenuti HIGH a riposo dalla scheda: il boot procede, ma
-> possono verificarsi **glitch sub-millisecondo** sui relè 4 e 5 a ogni
-> reset. Non disattivabile al 100% per come è cablato lo strip di pin;
-> vedi [docs/WIRING.md](docs/WIRING.md#perché-questo-pinout).
+> ✅ **Nessun relè sui pin di boot.** I pin campionati al reset
+> (GPIO0/GPIO2/GPIO15) sono usati da I2C e LED, compatibili con i livelli
+> richiesti. Non c'è quindi alcun glitch delle valvole all'accensione.
 >
-> **Conseguenza:** RX/TX sono occupati dall'I2C → niente `Serial` a runtime.
-> Il debug si fa via UDP e `/api/debug`.
+> ⚠️ **GPIO0 (SDA) è anche il pin di boot.** Il core lo tiene in
+> `INPUT_PULLUP` quando il bus è inattivo, quindi il reset avviene
+> normalmente. Un reset *esattamente durante* un transfer I2C potrebbe
+> però essere interpretato come richiesta di modalità download: caso molto
+> raro, recuperabile con un power-cycle.
+>
+> **Conseguenza:** RX/TX sono occupati dai relè 7 e 8 → niente `Serial` a
+> runtime. Il debug si fa via UDP e `/api/debug`.
 
 ## Layout della flash
 
@@ -199,8 +203,9 @@ docs/           BOM e schema di collegamento
 
 ## Limitazioni note
 
-- **Glitch al boot** sui relè mappati ai pin strap (D3/D4), vedi sopra.
-- Niente seriale a runtime (RX/TX su I2C).
+- Niente seriale a runtime (RX/TX usati dai relè 7 e 8).
+- Un reset durante un transfer I2C (GPIO0 = SDA) può occasionalmente
+  richiedere un power-cycle: vedi la nota nel pinout.
 - Un solo utente con privilegi pieni; le sessioni stanno in RAM (si perdono al
   riavvio, il che è voluto in caso di reboot non autorizzato).
 - L'HTML/JS non è minificato, per restare leggibile e modificabile on-device.

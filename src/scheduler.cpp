@@ -25,6 +25,7 @@ namespace {
     void writeRelay(uint8_t zone, bool open) {
         if (zone < 1 || zone > MAX_ZONES) return;
         int pin = Pin::RELAY[zone];
+        if (pin < 0) return;   // canale disabilitato (es. debug build)
         digitalWrite(pin, open ? RELAY_ACTIVE_LEVEL : !RELAY_ACTIVE_LEVEL);
     }
 
@@ -33,6 +34,7 @@ namespace {
         // il latch a 0 (= LOW). Con relè attivi bassi sarebbe un impulso di
         // eccitazione di pochi µs su tutti i canali a ogni boot.
         for (int z = 1; z <= MAX_ZONES; ++z) {
+            if (Pin::RELAY[z] < 0) continue;
             digitalWrite(Pin::RELAY[z], RELAY_SAFE_LEVEL);
             pinMode(Pin::RELAY[z], OUTPUT);
         }

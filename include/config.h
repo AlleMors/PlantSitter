@@ -20,40 +20,48 @@
 // ---------------------------------------------------------------------
 // PINOUT
 // ---------------------------------------------------------------------
-// Scelta: 8 relè sui 8 pin "comodi" D0..D7, I2C RTC sui pin RX/TX.
-//
-// Relè  IN1..IN8 : D0(16) D1(5) D2(4) D3(0) D4(2) D5(14) D6(12) D7(13)
-// I2C   SDA / SCL: RX(3)  / TX(1)
+// Relè  IN1..IN8 : D0(16) D1(5) D2(4) D5(14) D6(12) D7(13) RX(3) TX(1)
+// I2C   SDA / SCL: D3(0) / D4(2)
 // LED   status   : D8(15)
 //
-// ATTENZIONE - PIN DI BOOT:
-//   D3 (GPIO0) e D4 (GPIO2) sono STRAP: l'ESP li campiona al reset.
-//   con RELAY_ACTIVE_LOW (relè riposo = HIGH) gli ingressi opto sono
-//   tirati HIGH da pull-up esterni sulla scheda relè, quindi il boot
-//   procede, ma possono esserci glitch SUB-MILLISECOND sui relè 4 e 5
-//   a ogni avvio. Documentato in README > Limitazioni note.
+// PERCHÉ COSÌ: nessun relè sui pin di boot elimina i glitch all'accensione.
+// I pin di boot (D3/GPIO0, D4/GPIO2, D8/GPIO15) sono campionati al reset
+// prima che il firmware parta: un relè attivo-basso li porterebbe LOW e
+// potrebbe eccitare una valvola per qualche istante a ogni riavvio.
+// Qui invece li usano I2C e LED, che sono compatibili con i livelli
+// richiesti (pull-up del bus HIGH su GPIO0/GPIO2, LED verso GND su GPIO15).
 //
 // ATTENZIONE - SERIALE:
-//   RX/TX sono occupati dall'I2C => nessuna Serial a runtime.
+//   RX/TX sono occupati dai relè 7 e 8 => nessuna Serial a runtime.
 //   Debug via UDP (porta 54123) e endpoint HTTP /api/debug.
-//   Per riflashare da USB, staccare alimentazione e tenere premuto BOOT
-//   durante il reset (procedura standard ESP8266).
+//   Per riflashare da USB, staccare alimentazione dalla scheda relè e
+//   tenere premuto BOOT durante il reset (procedura standard ESP8266).
 // ---------------------------------------------------------------------
 namespace Pin {
+    // Nessun relè sui pin di boot (D3/GPIO0, D4/GPIO2, D8/GPIO15): al reset
+    // l'ESP li campiona prima che il firmware parta, e un ingresso relè
+    // attivo-basso li ecciterebbe per una frazione di secondo.
     static const int RELAY[9] = {
         -1,   // IN0 non usato
         16,   // IN1 = D0
         5,    // IN2 = D1
         4,    // IN3 = D2
-        0,    // IN4 = D3   (strap GPIO0)
-        2,    // IN5 = D4   (strap GPIO2)
-        14,   // IN6 = D5
-        12,   // IN7 = D6
-        13,   // IN8 = D7
+        14,   // IN4 = D5
+        12,   // IN5 = D6
+        13,   // IN6 = D7
+        3,    // IN7 = RX (GPIO3)
+#ifdef PLANTSITTER_DEBUG_BUILD
+        -1,   // IN8 disabilitato nel build di debug: TX serve alla seriale
+#else
+        1,    // IN8 = TX (GPIO1)
+#endif
     };
 
-    static const int I2C_SDA    = 3;   // RX
-    static const int I2C_SCL    = 1;   // TX
+    // I2C sui pin di boot: le pull-up del bus (sul modulo DS3231) li tengono
+    // HIGH, che è esattamente il livello richiesto al boot. Un ingresso relè
+    // attivo-basso, invece, li tirerebbe LOW e bloccherebbe l'avvio.
+    static const int I2C_SDA    = 0;   // D3 (GPIO0)
+    static const int I2C_SCL    = 2;   // D4 (GPIO2)
     static const int STATUS_LED = 15;  // D8 (strap LOW, LED verso GND = ok)
 }
 

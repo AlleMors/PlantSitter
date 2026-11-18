@@ -119,8 +119,42 @@ void setup() {
     }
 }
 
+// Il dispositivo non ha seriale a runtime (RX/TX sui relè): il LED di stato
+// è l'unico feedback immediato. Pattern:
+//   lampeggio veloce  = modalità setup / WiFi assente
+//   doppio lampo      = WiFi ok ma orologio non sincronizzato
+//   battito lento     = tutto ok
+//   acceso fisso      = zona aperta
+void updateStatusLed() {
+    static unsigned long last = 0;
+    static bool on = false;
+    unsigned long now = millis();
+    unsigned long phase;
+    bool want;
+
+    if (sched::activeZone() > 0) {
+        digitalWrite(Pin::STATUS_LED, HIGH);
+        return;
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+        phase = 200UL;                     // 200 ms acceso / 200 spento
+        want = ((now % (phase * 2)) < phase);
+    } else if (!psrtc::clockValid()) {
+        phase = 2000UL;                    // doppio lampo ogni 2 s
+        unsigned long p = now % phase;
+        want = (p < 120) || (p > 260 && p < 380);
+    } else {
+        phase = 3000UL;                    // battito: 60 ms ogni 3 s
+        want = ((now % phase) < 60);
+    }
+    digitalWrite(Pin::STATUS_LED, want ? HIGH : LOW);
+    (void)last; (void)on;
+}
+
 void loop() {
     static unsigned long lastHeal = 0;
+
+    updateStatusLed();
 
     // Critico: chiude la zona alla durata prevista anche senza rete.
     sched::tick();
